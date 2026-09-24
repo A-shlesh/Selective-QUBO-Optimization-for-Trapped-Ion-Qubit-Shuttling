@@ -1,0 +1,2 @@
+bqskit==1.2.1
+networkx==3.4.2
