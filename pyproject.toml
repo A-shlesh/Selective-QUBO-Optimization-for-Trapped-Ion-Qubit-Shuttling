@@ -9,6 +9,7 @@ description = "Selective QUBO Optimization for Trapped-Ion Qubit Shuttling"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "bqskit>=1.2.1",
     "networkx>=3.0",
     "numpy>=1.24",
     "matplotlib>=3.7",
