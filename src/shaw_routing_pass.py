@@ -220,14 +220,43 @@ class ShawRoutingPass(BasePass):
             # --- EXECUTION & STATE UPDATE ---
             self._walk_path(routed_circuit, pg, placement, clear_path, mover_logical)
 
-            # Safety-net check: the whole point of the walk above was
-            # to land both ions in the same trap. This should always
-            # hold by construction, but asserting it here turns a
-            # silent future bug (e.g. someone edits _walk_path and
-            # breaks that guarantee) into a loud, immediate failure
-            # instead of a wrong circuit that looks fine at a glance.
+            # The walk can leave a *gate* qudit parked on transport:
+            # a swap-through inside a full trap parks whoever was
+            # already there wherever the mover came from, which may
+            # be a segment. Appending the gate on top of that layout
+            # would bake in a broken circuit, so retry the gate later
+            # from the (still fully consistent) new positions instead
+            # -- persistent failure becomes the deadlock RuntimeError
+            # via the same counter/guard, never a silent wrong answer.
+            # (Non-gate ions stranded mid-walk are tolerated: later
+            # steps route them back when needed. Real eviction that
+            # avoids stranding anyone is congestion resolution's job.)
             final_trap_a = self._trap_of(pg, placement.position_of(logical_a))
             final_trap_b = self._trap_of(pg, placement.position_of(logical_b))
+            if (
+                final_trap_a is None
+                or final_trap_b is None
+                or final_trap_a != final_trap_b
+            ):
+                iterations_since_progress += 1
+                if iterations_since_progress > stall_limit:
+                    raise RuntimeError(
+                        f"Routing deadlock: qudits {logical_a}/{logical_b} "
+                        f"ended in different traps ({final_trap_a!r} vs "
+                        f"{final_trap_b!r}) after routing for gate {op_id} "
+                        f"{iterations_since_progress} times with no other "
+                        "progress. This needs real congestion resolution "
+                        "(eviction/rerouting), which doesn't exist yet -- "
+                        "see CongestionHandler."
+                    )
+                logger.warning(
+                    "Gate %s left qudits %s/%s in different traps (%r vs %r); "
+                    "deferring for retry", op_id, logical_a, logical_b,
+                    final_trap_a, final_trap_b,
+                )
+                front_layer.append(op_id)  # retry later
+                continue
+
             assert final_trap_a == final_trap_b, (
                 f"Routing invariant violated: qudits {logical_a}/{logical_b} "
                 f"still in different traps ({final_trap_a} vs {final_trap_b}) "
@@ -319,6 +348,8 @@ class ShawRoutingPass(BasePass):
         best_slot: Optional[str] = None
 
         for mover_logical, mover_pos, target_trap in candidates:
+            if target_trap is None:
+                continue  # qudit parked on transport has no trap to target
             target_slot = self._free_slot_in_trap(pg, placement, target_trap)
             if target_slot is None:
                 continue  # trap is full; not a usable candidate right now
@@ -403,13 +434,26 @@ class ShawRoutingPass(BasePass):
         Walk `mover_logical` hop by hop along `path`, updating
         Placement as we go.
 
-        A hop onto a position already occupied by a *different*
-        logical qudit is a genuine in-trap ion exchange ('swap' edge)
-        -> emit a SwapGate on the two logical qudits in the output
-        circuit. A hop onto a free slot or a transport/junction
-        position ('merge_split' / 'move' edges) is pure physical
-        shuttling -> no logical effect, so we mark it with a 1-qudit
-        IdentityGate placeholder rather than leaving it invisible.
+        Per hop, with occupant O on the next position (if any):
+          - free -> pure shuttling: move, mark with a 1-qudit
+            IdentityGate placeholder (no logical effect, but the
+            physical move really happened -- see note below).
+          - occupied and O's trap has a free slot -> shuffle O aside
+            into it first (also just an IdentityGate marker: a
+            physical move with no logical effect), then move in.
+            Preferring the shuffle over a swap keeps O inside its
+            trap instead of stranding it wherever the mover came
+            from (which may be a transport segment).
+          - occupied with nowhere to shuffle O into -> fall back to
+            a direct exchange, emitting a SwapGate on the two
+            logical qudits (the historical behavior). NOTE: if the
+            mover came from a different trap/segment, this parks O
+            there -- possibly on transport. run()'s post-walk check
+            retries the gate later when that leaves a *gate* qudit
+            stranded; parking only non-gate ions is tolerated (later
+            steps route them back when needed). Teaching the walk to
+            never strand anyone is real eviction planning and belongs
+            to congestion resolution, not this loop.
 
         Why bother marking pure shuttles at all: a SwapGate changing
         the circuit's *logical* meaning is one thing, but real
@@ -427,14 +471,7 @@ class ShawRoutingPass(BasePass):
         for next_pos in path[1:]:
             occupant = placement.occupant_of(next_pos)
 
-            if occupant is not None and occupant != mover_logical:
-                self._swap_ions(placement, mover_logical, occupant)
-                routed_circuit.append_gate(SwapGate(), (mover_logical, occupant))
-                logger.debug(
-                    "Swapped logical qudits %s <-> %s at %s",
-                    mover_logical, occupant, next_pos,
-                )
-            else:
+            if occupant is None or occupant == mover_logical:
                 placement.move(mover_logical, next_pos)
                 # TODO: Replace with module
                 # Real version: emit the actual shuttle/junction-
@@ -444,6 +481,31 @@ class ShawRoutingPass(BasePass):
                 logger.debug(
                     "Shuttled logical qudit %s -> %s", mover_logical, next_pos
                 )
+                continue
+
+            next_trap = self._trap_of(pg, next_pos)
+            if next_trap is not None:
+                free_slot = self._free_slot_in_trap(pg, placement, next_trap)
+                if free_slot is not None:
+                    placement.move(occupant, free_slot)
+                    routed_circuit.append_gate(IdentityGate(1), (occupant,))
+                    logger.debug(
+                        "Shuffled logical qudit %s aside -> %s",
+                        occupant, free_slot,
+                    )
+                    placement.move(mover_logical, next_pos)
+                    routed_circuit.append_gate(IdentityGate(1), (mover_logical,))
+                    logger.debug(
+                        "Shuttled logical qudit %s -> %s", mover_logical, next_pos
+                    )
+                    continue
+
+            self._swap_ions(placement, mover_logical, occupant)
+            routed_circuit.append_gate(SwapGate(), (mover_logical, occupant))
+            logger.debug(
+                "Swapped logical qudits %s <-> %s at %s",
+                mover_logical, occupant, next_pos,
+            )
 
     @staticmethod
     def _swap_ions(placement: Placement, qudit_a: int, qudit_b: int) -> None:

@@ -1,2 +1,6 @@
 bqskit==1.2.1
 networkx==3.4.2
+numpy>=1.24
+matplotlib>=3.7
+pytest>=7.4
+pytest-cov
