@@ -108,7 +108,6 @@ class PositionGraph:
     @property
     def num_edges(self) -> int:
         return self.graph.number_of_edges()
-
     def slots_of(self, trap_id: str) -> list[str]:
         return list(self._trap_slots[trap_id])
 

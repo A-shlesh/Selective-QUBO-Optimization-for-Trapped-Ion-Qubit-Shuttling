@@ -19,6 +19,17 @@ Demonstrates:
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+# Ensure Unicode output (→, ×, κ, …) works on Windows consoles that
+# default to cp1252. Safe no-op on UTF-8 systems / when redirected.
+for _stream_name in ("stdout", "stderr"):
+    _stream = getattr(sys, _stream_name, None)
+    try:
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+del _stream_name, _stream
+
 from qccd import (
     NodeType, EdgeOperation, PositionNode, PositionGraph,
     LinearChainArchitecture, GridArchitecture, JunctionArchitecture,
