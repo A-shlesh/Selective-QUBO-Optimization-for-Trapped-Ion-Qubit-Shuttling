@@ -41,7 +41,7 @@ HOW TO RUN YOUR CODE
 
 DEPENDENCIES
 ------------
-  dimod>=3.5      (ExactSolver, BinaryQuadraticModel)
+  dimod>=0.12     (ExactSolver, BinaryQuadraticModel)
   dwave-neal>=0.6 (SimulatedAnnealingSampler)
 """
 

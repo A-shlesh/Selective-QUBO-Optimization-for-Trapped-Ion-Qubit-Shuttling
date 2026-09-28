@@ -59,7 +59,7 @@ HOW TO RUN YOUR CODE
 
 DEPENDENCIES ALREADY INSTALLED
 -------------------------------
-  dimod>=3.5   (BinaryQuadraticModel, QUBO utilities)
+  dimod>=0.12  (BinaryQuadraticModel, QUBO utilities)
   networkx     (graph traversal, already used throughout)
 """
 
