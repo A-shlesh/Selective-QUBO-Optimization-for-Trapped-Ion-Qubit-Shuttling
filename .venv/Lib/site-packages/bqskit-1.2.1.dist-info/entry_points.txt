@@ -1,0 +1,4 @@
+[console_scripts]
+bqskit-manager = bqskit.runtime.manager:start_manager
+bqskit-server = bqskit.runtime.detached:start_server
+bqskit-worker = bqskit.runtime.worker:start_worker_rank

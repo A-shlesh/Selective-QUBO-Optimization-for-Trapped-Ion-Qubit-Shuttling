@@ -212,9 +212,8 @@ class ShawRoutingPass(BasePass):
             mover_start_pos = placement.position_of(mover_logical)
             raw_path = pg.shortest_path(mover_start_pos, target_slot)
 
-            # TODO: Replace with module
             clear_path = self.congestion_handler.resolve_path_congestion(
-                raw_path, placement
+                raw_path, placement, pg
             )
 
             # --- EXECUTION & STATE UPDATE ---

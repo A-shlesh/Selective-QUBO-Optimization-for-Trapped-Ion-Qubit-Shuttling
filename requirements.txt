@@ -4,3 +4,6 @@ numpy>=1.24
 matplotlib>=3.7
 pytest>=7.4
 pytest-cov
+# QUBO dependencies (Phase 6 + qubo_router sprint)
+dimod>=3.5
+dwave-neal>=0.6
