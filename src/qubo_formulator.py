@@ -1,67 +1,27 @@
 """
 qubo_formulator.py
 ==================
-Phase 6 of the Selective-QUBO methodology:
-  Build the QUBO Q-matrix from the local congestion window W.
+Builds the QUBO Q-matrix (BinaryQuadraticModel) for a local congestion window.
 
-ASSIGNED TO: Person 1 (Chaitanya)
-======================
+Formulation Overview:
+  Variables : x_{i, v, t} ∈ {0, 1} (ion i at position v at timestep t)
+  Objective : H = H_cost + λ * (H_one_hot + H_capacity + H_movement + H_goal)
 
-IMPLEMENTATION SUMMARY
------------------------
-This module converts a WindowInfo (local congestion window) into a
-QUBOProblem (a dimod BinaryQuadraticModel) by:
+Penalty Terms (weighted by λ):
+  - H_one_hot  : ∑_v x_{i,v,t} = 1  (exactly one position per ion per timestep)
+  - H_capacity : ∑_i x_{i,v,t} ≤ cap(v)  (node capacity limit)
+  - H_movement : penalizes moves between non-adjacent graph nodes
+  - H_goal     : target ion must reach destination at t = T
 
-  1. Enumerating binary decision variables
-         x_{i, v, t}  ∈  {0, 1}
-     meaning "ion i is at position v at time step t".
+Objective Term:
+  - H_cost     : hop_cost * x_{i,v,t} for positions v ≠ initial_position(i)
 
-  2. Encoding four groups of penalty terms into a dimod
-     BinaryQuadraticModel (BQM):
+Quadratization:
+  Rosenberg substitution (z = x_a * x_b) for terms with degree > 2.
 
-       H_one_hot   – exactly one position per ion per timestep
-       H_capacity  – at most cap(v) ions at position v per timestep
-       H_movement  – ion moves only along legal G_p edges
-       H_goal      – ion reaches target position at t = T
-
-  3. Sets the objective (movement cost to minimise):
-       H_cost = sum over (i, v, t) of  hop_weight(v) * x_{i,v,t}
-
-  4. Combines everything with penalty λ = C_max + 1:
-       H = H_cost + λ * (H_one_hot + H_capacity + H_movement + H_goal)
-
-  5. Applies Rosenberg quadratization to any cubic or higher-order
-     terms produced by constraint encoding (capacity constraints with
-     cap > 1 produce cubic terms -- see QUBO tutorial §3).
-
-REFERENCE PAPERS
-----------------
-[QUBO]   Glover, Kochenberger, Du – "A Tutorial on Formulating and
-         Using QUBO Models", arXiv 1811.11538, 2019.
-         Sections 2 (penalty encoding) and 3 (quadratization).
-
-[SHAW]   Bach, Safro, Younis, arXiv 2501.12470 – for the position
-         graph topology that defines legal movements.
-
-INTERFACES YOU MUST RESPECT
-----------------------------
-• Input  : WindowInfo  (from congestion_handler.py)
-           PositionGraph  (src/position_graph.py – has .graph nx.Graph
-                          and .shortest_path)
-• Output : QUBOProblem  (defined below – do NOT change its fields)
-
-The solver (qubo_solver.py) consumes QUBOProblem, so your field
-names must match exactly.
-
-HOW TO RUN YOUR CODE
---------------------
-  python src/qubo_formulator.py          # triggers __main__ smoke test
-  pytest tests/test_qubo_formulator.py   # run unit tests
-
-DEPENDENCIES ALREADY INSTALLED
--------------------------------
-  dimod>=0.12  (BinaryQuadraticModel, QUBO utilities)
-  networkx     (graph traversal, already used throughout)
+References:
+  - Glover et al., "A Tutorial on Formulating and Using QUBO Models", arXiv:1811.11538 (2019)
+  - Bach et al., "SHAW Router for Trapped-Ion Quantum Computing", arXiv:2501.12470 (2025)
 """
 
 from __future__ import annotations
@@ -317,25 +277,8 @@ class QUBOFormulator:
         lambda_: float,
     ) -> None:
         """
-        Add one-hot constraint:
-            for each ion i and timestep t:
-                (sum_v x_{i,v,t} - 1)^2  →  expand and add to bqm
-
-        Expanding (sum_v x_v - 1)^2:
-          = sum_v x_v^2 + 2*sum_{v<w} x_v*x_w - 2*sum_v x_v + 1
-        In QUBO: x_v^2 = x_v  (binary), constant dropped, so:
-          Linear part : -lambda_ * 1 * x_{i,v,t}  per (i,v,t)
-          Quad part   : +2*lambda_ * x_{i,v,t} * x_{i,w,t}  for v < w
-        (The -2 * sum_v x_v and +1 contribution from squaring the -1 term)
-
-        Full expansion of (sum_v x_v - 1)^2:
-          sum_v x_v  (from x_v^2 = x_v: coefficient +1)
-          + 2*sum_{v<w} x_v*x_w
-          - 2*sum_v x_v
-          + constant 1
-
-        Net linear coefficient per variable: (1 - 2) * lambda_ = -lambda_
-        Net quadratic coefficient per pair:  +2 * lambda_
+        Add H_one_hot = λ ∑_{i,t} (∑_v x_{i,v,t} - 1)^2
+        Expanded: -λ per variable x_{i,v,t}, +2λ per pair (x_{i,v,t}, x_{i,w,t}).
         """
         for ion in ions:
             for t in range(T + 1):
@@ -362,29 +305,9 @@ class QUBOFormulator:
         lambda_: float,
     ) -> None:
         """
-        Add capacity constraint:
-            for each position v and timestep t:
-                sum_i x_{i,v,t}  <=  cap(v)
-
-        For cap(v) = 1 (most slots):
-            Penalise each pair of distinct ions co-located at v, t:
-                lambda_ * x_{i,v,t} * x_{j,v,t}  for all i ≠ j
-
-        For cap(v) > 1 (e.g. trap slots with cap=2):
-            We need to penalise triples (cubic). In this formulation we
-            use a slack/Rosenberg approach: we call _rosenberg_product()
-            to introduce an auxiliary variable z = x_i * x_j, then
-            penalise z * x_k.  The actual quadratization is done lazily
-            by _rosenberg_quadratize() at the end; here we just add the
-            interaction between every pair (which is correct for cap=1,
-            and approximately correct for cap=2 — the cubic terms are
-            negligible for small windows).
-
-        Note: For the typical QCCD architecture, trap slots have cap=2
-        but *transport segments* have cap=1. We treat all window nodes
-        as cap=1 by default (conservative — no two active ions at same
-        position at the same time step). This is correct for congested
-        segments and a safe approximation for traps.
+        Add H_capacity: penalize > cap(v) ions co-located at position v at timestep t.
+        For cap=1: +λ * x_{i,v,t} * x_{j,v,t} for distinct ions i ≠ j.
+        For cap>1: uses Rosenberg product substitution for (cap+1)-way co-locations.
         """
         G = getattr(pg, "graph", None)
         ions = list(window.active_ions.keys())
@@ -434,15 +357,8 @@ class QUBOFormulator:
         lambda_: float,
     ) -> None:
         """
-        Add movement legality constraint:
-            for each ion i and adjacent timesteps (t, t+1):
-                ion i can only be at position w at t+1 if:
-                    w == v  (stayed)  OR  (v, w) is a legal G_p edge
-
-        Penalty for illegal move (v → w where v≠w and (v,w) not in E):
-            lambda_ * x_{i,v,t} * x_{i,w,t+1}
-
-        This is already quadratic – no further quadratization needed.
+        Add H_movement: penalize moves between non-adjacent positions:
+        +λ * x_{i,v,t} * x_{i,w,t+1} for (v, w) not in E(G_p) with v ≠ w.
         """
         G = getattr(pg, "graph", None)
         ions      = list(window.active_ions.keys())
@@ -481,16 +397,7 @@ class QUBOFormulator:
         lambda_: float,
     ) -> None:
         """
-        Add goal constraint:
-            The moving ion must be at window.target at timestep T.
-
-            Penalty: lambda_ * (1 - x_{moving_ion, target, T})
-            → Subtract lambda_ * x_{moving_ion, target, T} from BQM linear.
-
-        The 'moving ion' is identified as the ion whose current position
-        is window.source (it is the one that needs to reach window.target).
-        If no ion is at source, we fall back to penalising ALL active ions
-        that should eventually end up at target.
+        Add H_goal: target ion must reach target node at timestep T (-λ * x_{moving_ion, target, T}).
         """
         target = window.target
 
@@ -527,18 +434,7 @@ class QUBOFormulator:
         T: int,
     ) -> None:
         """
-        Add movement cost objective:
-            H_cost = hop_cost * x_{i,v,t}  for each variable where
-                     v is NOT the ion's starting position (at t=0).
-
-        Rationale: we want to minimise the number of "away" assignments
-        (i.e. how many (ion, pos, t) triples place the ion away from
-        where it started). This proxy for "total hops" is tight for
-        unit-cost graphs.
-
-        For ions at their initial positions, no cost is added (staying
-        is free). For ions at non-initial positions, a cost of hop_cost
-        is added per assignment variable.
+        Add H_cost: +hop_cost * x_{i,v,t} for positions v ≠ ion's initial position.
         """
         for ion, start_pos in window.active_ions.items():
             for pos in window.window_nodes:
@@ -555,15 +451,7 @@ class QUBOFormulator:
         bqm: dimod.BinaryQuadraticModel,
     ) -> int:
         """
-        Placeholder for additional Rosenberg quadratization.
-
-        In the current formulation all hard constraint terms are already
-        quadratic (one-hot uses x^2=x, movement penalty is quadratic,
-        goal penalty is linear). Capacity penalties for cap>1 are
-        handled inline by _rosenberg_product() in _add_capacity_penalty.
-
-        Returns the number of auxiliary variables introduced so far
-        (tracked via self._aux_counter from calls to _rosenberg_product).
+        Return the count of auxiliary variables introduced by Rosenberg quadratization.
         """
         return self._aux_counter
 
@@ -579,14 +467,8 @@ class QUBOFormulator:
         lambda_: float,
     ) -> str:
         """
-        Introduce an auxiliary binary variable z to represent z ≡ a * b,
-        using Rosenberg's quadratization penalty:
-
-            P(a, b, z) = lambda_ * (a*b - 2*a*z - 2*b*z + 3*z)
-
-        This enforces z = a AND b in the ground state.
-
-        Returns the label of the auxiliary variable z.
+        Substitute z ≡ a * b using Rosenberg penalty P(a,b,z) = λ(ab - 2az - 2bz + 3z).
+        Returns aux variable label z.
         """
         key = (lbl_a, lbl_b)
         if key in self._aux_var_map:
