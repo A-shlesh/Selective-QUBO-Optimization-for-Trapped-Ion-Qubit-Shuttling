@@ -580,21 +580,14 @@ class CongestionHandler:
         size_capped = False
 
         if len(window_nodes) > self.window_max_size:
-            # Trim: keep core path + parking spots, then add BFS greedily
+            # Trim: prioritize core path nodes, then parking spots, then outer BFS nodes
             size_capped = True
-            trimmed: Set[Any] = core_nodes | parking_spots
-            # Fill remaining budget with BFS nodes closest to blocked
-            remaining = self.window_max_size - len(trimmed)
-            if remaining > 0:
-                sorted_bfs = sorted(
-                    bfs_nodes - trimmed,
-                    key=lambda n: min(
-                        nx.shortest_path_length(G, bp, n)
-                        for bp in blocked
-                        if bp in G and nx.has_path(G, bp, n)
-                    ) if blocked else 0,
-                )
-                trimmed.update(sorted_bfs[:remaining])
+            trimmed: Set[Any] = set()
+            priority_order = list(core_nodes) + [n for n in parking_spots if n not in core_nodes] + [n for n in bfs_nodes if n not in core_nodes and n not in parking_spots]
+            for node in priority_order:
+                if len(trimmed) >= self.window_max_size:
+                    break
+                trimmed.add(node)
             window_nodes = trimmed
 
         # ---- Classify ions -----------------------------------------------

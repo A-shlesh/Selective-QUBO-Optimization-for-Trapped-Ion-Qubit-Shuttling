@@ -1,1 +1,34 @@
-[]
+[
+  {
+    "run_id": "run_001",
+    "timestamp": "2026-10-01 00:51:59",
+    "label": "pytest run (58/59 passed)",
+    "git_commit": "4b35c2b",
+    "total_shuttle_ops": 0,
+    "total_compile_time_s": 16.8378,
+    "total_qubo_triggers": 0,
+    "avg_qubo_vars": 0.0,
+    "circuits_tested": 59,
+    "custom_metrics": {
+      "tests_passed": 58.0,
+      "tests_failed": 1.0,
+      "pass_rate_pct": 98.3
+    }
+  },
+  {
+    "run_id": "run_002",
+    "timestamp": "2026-10-01 00:52:37",
+    "label": "pytest run (59/59 passed)",
+    "git_commit": "4b35c2b",
+    "total_shuttle_ops": 0,
+    "total_compile_time_s": 1.8493,
+    "total_qubo_triggers": 0,
+    "avg_qubo_vars": 0.0,
+    "circuits_tested": 59,
+    "custom_metrics": {
+      "tests_passed": 59.0,
+      "tests_failed": 0.0,
+      "pass_rate_pct": 100.0
+    }
+  }
+]
