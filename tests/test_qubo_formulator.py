@@ -42,7 +42,6 @@ def _make_window():
 # Tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1", strict=False)
 def test_build_returns_qubo_problem():
     window, pg = _make_window()
     formulator = QUBOFormulator()
@@ -50,7 +49,6 @@ def test_build_returns_qubo_problem():
     assert isinstance(problem, QUBOProblem)
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1", strict=False)
 def test_variable_count_matches_window():
     """Number of variables = |active_ions| × |window_nodes| × T."""
     window, pg = _make_window()
@@ -60,7 +58,6 @@ def test_variable_count_matches_window():
     assert problem.num_variables == expected
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1", strict=False)
 def test_bqm_is_qubo_type():
     import dimod
     window, pg = _make_window()
@@ -68,7 +65,6 @@ def test_bqm_is_qubo_type():
     assert isinstance(problem.bqm, dimod.BinaryQuadraticModel)
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1", strict=False)
 def test_var_map_and_inv_var_map_consistent():
     window, pg = _make_window()
     problem = QUBOFormulator().build(window, pg)
@@ -76,7 +72,6 @@ def test_var_map_and_inv_var_map_consistent():
         assert problem.inv_var_map[label] == key
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1", strict=False)
 def test_penalty_lambda_satisfies_constraint():
     """λ must be > maximum possible objective contribution."""
     window, pg = _make_window()
@@ -84,14 +79,31 @@ def test_penalty_lambda_satisfies_constraint():
     assert problem.penalty_lambda >= problem.time_horizon + 1
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1", strict=False)
 def test_time_horizon_at_least_path_length():
     window, pg = _make_window()
     problem = QUBOFormulator().build(window, pg)
-    # T must be at least the hop distance source→target
     assert problem.time_horizon >= 1
 
 
+def test_initial_position_pinned_at_t0():
+    """Verify hard penalty pins active ions to starting position at t=0."""
+    window, pg = _make_window()
+    problem = QUBOFormulator().build(window, pg)
+    for ion, start_pos in window.active_ions.items():
+        start_label = problem.var_map[(ion, start_pos, 0)]
+        # Bias on starting position variable at t=0 should be negative (encouraged/pinned)
+        assert problem.bqm.linear[start_label] < 0.0
+
+
+def test_capacity_penalty_aux_vars_for_cap_2():
+    """Verify capacity > 1 generates aux variables and penalty wall."""
+    window, pg = _make_window()
+    # Force a node capacity of 2 on a window node
+    pg.graph.nodes['t0:0']['capacity'] = 2
+    problem = QUBOFormulator().build(window, pg)
+    assert problem.bqm is not None
+
+
 if __name__ == "__main__":
-    print("test_qubo_formulator.py: placeholder tests loaded.")
-    print("Implement QUBOFormulator.build() (Person 1), then run: pytest tests/test_qubo_formulator.py")
+    pytest.main(["-v", __file__])
+

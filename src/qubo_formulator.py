@@ -146,12 +146,11 @@ class QUBOFormulator:
         num_variables = len(var_map)
 
         # 3. Compute lambda (penalty strength)
-        # λ = C_max + 1 where C_max is max possible cost contribution
-        # C_max ≤ num_ions * num_positions * T * hop_cost
+        # Tight upper bound: each ion occupies at most 1 node per timestep (H_one_hot)
         num_ions = len(window.active_ions)
         num_pos  = len(window.window_nodes)
-        C_max    = num_ions * num_pos * T * self.hop_cost
-        lambda_  = self.penalty_lambda if self.penalty_lambda is not None else (C_max + 1)
+        C_max    = num_ions * T * self.hop_cost
+        lambda_  = self.penalty_lambda if self.penalty_lambda is not None else (C_max + 1.0)
 
         # 4. Initialise empty BQM
         bqm = dimod.BinaryQuadraticModel(vartype=dimod.BINARY)
@@ -164,6 +163,7 @@ class QUBOFormulator:
         positions = list(window.window_nodes)
 
         # 5. Encode constraints as penalty terms
+        self._add_initial_position_penalty(bqm, var_map, window, lambda_)
         self._add_one_hot_penalty(bqm, var_map, ions, positions, T, lambda_)
         self._add_capacity_penalty(bqm, var_map, window, pg, T, lambda_)
         self._add_movement_penalty(bqm, var_map, window, pg, T, lambda_)
@@ -172,9 +172,15 @@ class QUBOFormulator:
         # 6. Add cost objective
         self._add_cost_objective(bqm, var_map, window, T)
 
-        # 7. Rosenberg quadratization (handles any leftover cubic terms)
-        #    For cap=1 all constraints are already quadratic; this is a safety net.
+        # 7. Rosenberg quadratization aux variable tracking
         num_aux = self._rosenberg_quadratize(bqm)
+
+        total_vars = len(bqm.variables)
+        if total_vars > 100:
+            logger.warning(
+                "QUBOProblem formulation size (%d variables) exceeds soft budget of 100",
+                total_vars,
+            )
 
         logger.info(
             "QUBOFormulator.build(): T=%d, ions=%d, positions=%d, "
@@ -267,6 +273,22 @@ class QUBOFormulator:
 
         return var_map, inv_var_map
 
+    def _add_initial_position_penalty(
+        self,
+        bqm: dimod.BinaryQuadraticModel,
+        var_map: Dict,
+        window: WindowInfo,
+        lambda_: float,
+    ) -> None:
+        """
+        Add H_init: hard constraint pinning each active ion to its initial position at t=0.
+        Subtracts λ from linear bias of x_{i, s_i, 0}, forcing x_{i, s_i, 0} = 1 in ground state.
+        """
+        for ion, start_pos in window.active_ions.items():
+            key = (ion, start_pos, 0)
+            if key in var_map:
+                bqm.add_variable(var_map[key], -lambda_)
+
     def _add_one_hot_penalty(
         self,
         bqm: dimod.BinaryQuadraticModel,
@@ -332,10 +354,7 @@ class QUBOFormulator:
                         bqm.add_interaction(lbl1, lbl2, lambda_)
 
                 else:
-                    # cap >= 2: only penalise (cap+1)-way co-location
-                    # For simplicity, penalise triples (works for cap=2)
-                    # Using Rosenberg quadratization for x_a * x_b * x_c:
-                    #   z = x_a * x_b  →  then penalise z * x_c
+                    # cap >= 2: penalise (cap+1)-way co-location
                     for combo in itertools.combinations(ion_vars, cap + 1):
                         lbls = [lbl for _, lbl in combo]
                         # Quadratize greedily: chain through pairs
@@ -343,9 +362,8 @@ class QUBOFormulator:
                         for next_lbl in lbls[1:]:
                             aux = self._rosenberg_product(bqm, running, next_lbl, lambda_)
                             running = aux
-                        # The final `running` represents the product of all;
-                        # a penalty of lambda_ applied via the aux var chain
-                        # already encodes the constraint.
+                        # Apply penalty +lambda on the product variable representing co-location:
+                        bqm.add_variable(running, lambda_)
 
     def _add_movement_penalty(
         self,
@@ -416,15 +434,10 @@ class QUBOFormulator:
                     "Goal penalty: ion %s must reach %s at t=%d", moving_ion, target, T
                 )
         else:
-            # Fallback: encourage any active ion to be at target at T
-            logger.debug(
-                "Goal penalty: no ion at source %s; applying soft goal to all ions",
+            logger.warning(
+                "Goal penalty skipped: no active ion found at window.source %s",
                 window.source,
             )
-            for ion in window.active_ions:
-                key = (ion, target, T)
-                if key in var_map:
-                    bqm.add_variable(var_map[key], -lambda_)
 
     def _add_cost_objective(
         self,
