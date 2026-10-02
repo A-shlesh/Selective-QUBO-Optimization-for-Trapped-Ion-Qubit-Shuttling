@@ -497,6 +497,17 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
 
+    # UTF-8 stdout/stderr so the ✓ marks below print on Windows
+    # consoles (default cp1252) as well as UTF-8 systems.
+    for _stream_name in ("stdout", "stderr"):
+        _stream = getattr(sys, _stream_name, None)
+        try:
+            if _stream is not None and hasattr(_stream, "reconfigure"):
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    del _stream_name, _stream
+
     # Make sure src/ is on the path when running directly
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 

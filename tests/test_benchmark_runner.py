@@ -10,7 +10,6 @@ Run with: pytest tests/test_benchmark_runner.py -v
 
 import sys
 from pathlib import Path
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -35,7 +34,6 @@ def test_runner_initialization():
     assert runner.rho_threshold == 0.4
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 4", strict=False)
 def test_run_baseline_metrics():
     runner = BenchmarkRunner()
     circuit = _make_test_circuit()
@@ -46,7 +44,6 @@ def test_run_baseline_metrics():
     assert metrics.total_shuttle_ops >= 0
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 4", strict=False)
 def test_compare_baseline_vs_hybrid():
     runner = BenchmarkRunner()
     b_metrics = RunMetrics(

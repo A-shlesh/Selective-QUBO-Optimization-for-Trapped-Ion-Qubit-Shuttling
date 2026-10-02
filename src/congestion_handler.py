@@ -137,7 +137,8 @@ class CongestionEvent:
     path_length: int
     metrics: CongestionMetrics
     window: Optional[WindowInfo]
-    outcome: str            # "clear", "rerouted", "greedy_cleared", "unresolved"
+    outcome: str            # "clear", "rerouted", "greedy_cleared",
+                            # "qubo_accepted", "unresolved"
     alt_path_length: int    # length of returned path (same as path_length if no reroute)
 
 
@@ -182,6 +183,7 @@ class CongestionHandler:
             "clear_paths": 0,        # no blockage at all
             "blocked_events": 0,     # at least one intermediate blocked
             "qubo_triggers": 0,      # severe enough to escalate
+            "qubo_accepted": 0,      # decoded QUBO path applied (best-effort)
             "rerouted": 0,           # found a fully clear alternate path
             "greedy_cleared": 0,     # greedy blocker shuffle succeeded
             "unresolved": 0,         # returned original path unchanged
@@ -294,11 +296,29 @@ class CongestionHandler:
             # The QUBO formulation (Phase 6) will consume `window` in the
             # next sprint.  For now, fall through to greedy clearing.
 
-        # ---- Step 5: greedy clearing -------------------------------------
+        # ---- Step 4.5: selective QUBO solve ------------------------------
+        # On a trigger, formulate the window, solve it, and decode/
+        # validate the result. An accepted solution is applied to the
+        # live placement and its decoded path returned; anything else
+        # falls through to greedy clearing below. (Imports are
+        # function-level: the qubo modules import WindowInfo from THIS
+        # module, so top-level imports would be circular.)
         resolved_path = path  # default: return original, let _walk_path handle it
         outcome = "unresolved"
 
-        if pg is not None:
+        if triggered and window is not None and pg is not None:
+            qubo_path = self._try_qubo_solve(window, placement, pg, path)
+            if qubo_path is not None:
+                resolved_path = qubo_path
+                outcome = "qubo_accepted"
+                self.stats["qubo_accepted"] += 1
+                logger.info(
+                    "QUBO accepted: returning decoded %d-hop path.",
+                    len(qubo_path) - 1,
+                )
+
+        # ---- Step 5: greedy clearing -------------------------------------
+        if outcome == "unresolved" and pg is not None:
             # 5a. Try rerouting – a fully clear alternate path
             alt = self._find_unblocked_path(path[0], path[-1], placement, pg)
             if alt is not None and alt != path:
@@ -326,8 +346,9 @@ class CongestionHandler:
                         "Could not clear path; returning original "
                         "(shaw_routing_pass will handle swap/deadlock)."
                     )
-        else:
-            # No pg – can only log
+        elif pg is None:
+            # No pg – can only log (a "qubo_accepted" outcome skips
+            # both branches above and lands here, so re-check pg).
             self.stats["unresolved"] += 1
             logger.info("No position graph available; path returned unchanged.")
 
@@ -342,6 +363,59 @@ class CongestionHandler:
         self.stats["events"].append(event)
 
         return resolved_path
+
+    # -----------------------------------------------------------------------
+    # Phase 4.5 – selective QUBO solve (formulate → solve → decode → apply)
+    # -----------------------------------------------------------------------
+
+    def _try_qubo_solve(
+        self,
+        window: WindowInfo,
+        placement: "Placement",
+        pg: "PositionGraph",
+        path: List[Any],
+    ) -> Optional[List[Any]]:
+        """
+        Best-effort QUBO resolution for one triggered window. Formulate
+        the window, solve it (auto exact/SA), decode + validate the
+        sample, and apply accepted trajectories to the live placement.
+
+        Returns the decoded path on accept, None on any failure -- the
+        caller falls back to greedy clearing, so a QUBO miss never
+        breaks routing, it just costs the solve time. Anything raising
+        here is caught and logged for the same reason: optimization is
+        best-effort, the heuristic fallback is always safe.
+        """
+        # Function-level imports: qubo_solver → qubo_formulator →
+        # congestion_handler (this module) at top level, so importing
+        # them up top would be circular.
+        from qubo_formulator import QUBOFormulator
+        from qubo_solver import QUBOSolver
+        from solution_decoder import SolutionDecoder
+
+        try:
+            problem = QUBOFormulator().build(window, pg)
+            solution = QUBOSolver().solve(problem)
+            decoded = SolutionDecoder().decode_and_validate(solution, placement, pg)
+        except Exception as exc:
+            logger.warning(
+                "QUBO formulate/solve/decode failed (%s); falling back to greedy.",
+                exc,
+            )
+            return None
+
+        if not decoded.accepted or not decoded.decoded_path:
+            return None
+
+        try:
+            SolutionDecoder().apply_to_placement(decoded, placement, pg)
+        except ValueError as exc:
+            logger.warning(
+                "QUBO apply failed (%s); falling back to greedy.", exc
+            )
+            return None
+
+        return decoded.decoded_path
 
     # -----------------------------------------------------------------------
     # Phase 3 – Severity metrics
