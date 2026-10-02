@@ -113,9 +113,10 @@ class BenchmarkRunner:
         elapsed = time.perf_counter() - started
         shuttles, swaps = self._count_ops(routed) if success else (0, 0)
         stats = handler.stats
-        # Do not equate a QUBO trigger with a solve or an accepted solution.
-        accepted = 0
+        # Triggers count escalations; accepted counts decoded QUBO paths
+        # actually applied (0 when everything fell back to greedy).
         triggers = stats["qubo_triggers"]
+        accepted = stats.get("qubo_accepted", 0)
         return RunMetrics(
             circuit_name=circuit_name,
             mode="hybrid_qubo" if hybrid else "baseline",
@@ -141,7 +142,7 @@ class BenchmarkRunner:
         return self._route(circuit_name, circuit, hybrid=False)
 
     def run_hybrid(self, circuit_name: str, circuit: Circuit) -> RunMetrics:
-        """Run trigger-enabled SHAW (currently greedy fallback, not QUBO solving)."""
+        """Run trigger-enabled SHAW (selective QUBO with greedy fallback)."""
         return self._route(circuit_name, circuit, hybrid=True)
 
     def compare(self, baseline: RunMetrics, hybrid: RunMetrics) -> ComparisonResult:

@@ -9,13 +9,10 @@ Run with:  pytest tests/test_qubo_solver.py -v
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 1 + 2", strict=False)
 def test_exact_solver_finds_optimal():
     """ExactSolver on a tiny 4-variable problem returns lowest-energy sample."""
     import dimod
@@ -46,7 +43,6 @@ def test_exact_solver_finds_optimal():
     assert solution.solver_used == "exact"
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 2", strict=False)
 def test_sa_returns_valid_solution():
     """SA on a 25-variable problem returns a binary sample dict."""
     import dimod
@@ -74,7 +70,6 @@ def test_sa_returns_valid_solution():
     assert all(v in (0, 1) for v in solution.sample.values())
 
 
-@pytest.mark.xfail(reason="Not yet implemented by Person 2", strict=False)
 def test_auto_selects_exact_for_small():
     from qubo_solver import QUBOSolver
     # Can't fully test without QUBOProblem, but check threshold logic
@@ -83,5 +78,7 @@ def test_auto_selects_exact_for_small():
 
 
 if __name__ == "__main__":
-    print("test_qubo_solver.py: placeholder tests loaded.")
-    print("Implement QUBOSolver (Person 2), then run: pytest tests/test_qubo_solver.py")
+    test_exact_solver_finds_optimal()
+    test_sa_returns_valid_solution()
+    test_auto_selects_exact_for_small()
+    print("test_qubo_solver: all tests passed")
